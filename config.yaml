@@ -1,0 +1,28 @@
+app:
+  log_dir: "logs"
+  log_level: "INFO"         # DEBUG / INFO / WARNING / ERROR
+  dry_run: false            # true = non inserisce, ma logga cosa farebbe
+
+csv:
+  path: "data/input.csv"
+  delimiter: ";"            # ";" se il CSV è italiano
+  encoding: "utf-8-sig"     # utile se c’è BOM
+  chunksize: 2000           # righe per batch insert
+  null_values: ["", "NULL", "null", "None"]
+  decimal_separator: ","
+  thousands_separator: "."
+  datetime_formats:
+      - "%d/%m/%Y %H:%M:%S"
+      - "%d/%m/%Y %H:%M:%S.%f"
+      - "%d/%m/%Y"
+      - "%Y-%m-%d %H:%M:%S"
+      - "%Y-%m-%d %H:%M:%S.%f"
+      - "%Y-%m-%d"
+
+
+sqlserver:
+  connection_string: "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=AMADORI_STATISTICS;UID=sa;PWD=admin;TrustServerCertificate=yes;"
+  schema: "dbo"
+  table: "OrderLines"
+  fast_executemany: true
+  timeout_seconds: 30
