@@ -18,11 +18,13 @@ csv:
       - "%Y-%m-%d %H:%M:%S"
       - "%Y-%m-%d %H:%M:%S.%f"
       - "%Y-%m-%d"
+      - "%d/%m/%Y %H:%M"
+      - "%Y-%m-%d %H:%M:%S,%f"
 
 
 sqlserver:
   connection_string: "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=AMADORI_STATISTICS;UID=sa;PWD=admin;TrustServerCertificate=yes;"
   schema: "dbo"
-  table: "OrderLines"
+  table: "PSC_PH1_rev1"
   fast_executemany: true
   timeout_seconds: 30
