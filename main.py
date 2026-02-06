@@ -116,12 +116,27 @@ def main() -> int:
         # --- Read table schema/types and build converters ---
         col_types = get_table_types(cn, schema, table)
 
-        missing_in_table = [c for c in columns if c not in col_types]
-        if missing_in_table:
-            logger.error("Colonne del CSV non presenti nella tabella %s.%s: %s", schema, table, missing_in_table)
-            logger.error("Correggi header CSV o tabella (nomi colonne devono combaciare).")
+        # 1) Tieni solo le colonne presenti anche in tabella (match per nome)
+        columns_sql = [c for c in columns if c in col_types]
+        columns_ignored = [c for c in columns if c not in col_types]
+
+        if columns_ignored:
+            logger.warning(
+                "Colonne presenti nel CSV ma NON nella tabella %s.%s (IGNORATE): %s",
+                schema, table, columns_ignored
+            )
+
+        if not columns_sql:
+            logger.error(
+                "Nessuna colonna del CSV combacia con la tabella %s.%s. Impossibile inserire.",
+                schema, table
+            )
             return 3
 
+        logger.info("Colonne che verranno INSERITE (%d): %s", len(columns_sql), columns_sql)
+
+        # 2) Converters solo per le colonne che inserirò
+        #    (build_converters crea converter per tutte le colonne tabella; va bene così)
         converters = build_converters(
             col_types=col_types,
             decimal_sep=str(csv_cfg.get("decimal_separator", ",")),
@@ -129,7 +144,8 @@ def main() -> int:
             datetime_formats=csv_cfg.get("datetime_formats"),
         )
 
-        insert_sql = build_insert_statement(schema=schema, table=table, columns=columns)
+        # 3) Insert SQL basato solo sulle colonne comuni
+        insert_sql = build_insert_statement(schema=schema, table=table, columns=columns_sql)
 
         chunksize = int(csv_cfg.get("chunksize", 2000))
         fast_executemany = bool(sql_cfg.get("fast_executemany", True))
@@ -137,7 +153,11 @@ def main() -> int:
         for i, batch in enumerate(chunked(rows_iter, chunksize), start=1):
             # Convert row values to match SQL Server column types (avoid 22018)
             try:
-                batch_converted = [convert_row(r, converters) for r in batch]
+                batch_converted = []
+                for r in batch:
+                    # tieni solo le colonne che inserirò
+                    r_filtered = {k: r.get(k) for k in columns_sql}
+                    batch_converted.append(convert_row(r_filtered, converters))
             except Exception:
                 logger.exception("Errore conversione tipi (batch #%d).", i)
                 raise
@@ -145,7 +165,7 @@ def main() -> int:
             inserted = insert_batch(
                 cn=cn,
                 insert_sql=insert_sql,
-                columns=columns,
+                columns=columns_sql,
                 rows=batch_converted,
                 fast_executemany=fast_executemany,
                 logger=logger,

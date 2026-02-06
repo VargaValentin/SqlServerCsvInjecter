@@ -25,6 +25,6 @@ csv:
 sqlserver:
   connection_string: "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=AMADORI_STATISTICS;UID=sa;PWD=admin;TrustServerCertificate=yes;"
   schema: "dbo"
-  table: "ORDER_LINES"
+  table: "PSC"
   fast_executemany: true
   timeout_seconds: 30
