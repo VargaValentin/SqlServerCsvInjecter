@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -32,6 +32,66 @@ def parse_args():
     ap.add_argument("--pick-csv", action="store_true", help="Apri UI per scegliere il CSV")
     ap.add_argument("--csv", default=None, help="Override path CSV (sovrascrive config)")
     return ap.parse_args()
+
+
+def _format_value_for_log(v: Any) -> str:
+    """Log-friendly value preview (non esplode su roba strana)."""
+    try:
+        if v is None:
+            return "None"
+        if isinstance(v, str):
+            s = v
+            preview = s if len(s) <= 120 else (s[:117] + "...")
+            return f"str(len={len(s)})={preview!r}"
+        return f"{type(v).__name__}={v!r}"
+    except Exception:
+        return f"{type(v).__name__}=<unprintable>"
+
+
+def _diagnose_truncation_row_by_row(
+    cn,
+    insert_sql: str,
+    columns: List[str],
+    rows_converted: List[Dict[str, Any]],
+    logger,
+    dry_run: bool,
+) -> None:
+    """
+    Diagnostica: prova a inserire riga-per-riga per identificare quale colonna/valore
+    causa il problema di truncation/buffer.
+    """
+    if dry_run:
+        logger.info("dry_run=True: salto diagnostica row-by-row.")
+        return
+
+    # build tuple values (ordine colonne)
+    values: List[Tuple[Any, ...]] = []
+    for r in rows_converted:
+        values.append(tuple(r.get(c) for c in columns))
+
+    # prova riga per riga
+    cur = cn.cursor()
+    try:
+        for i, row in enumerate(values):
+            try:
+                cur.execute(insert_sql, row)
+            except Exception as e:
+                logger.error("DIAGNOSTICA: fallimento alla riga batch_index=%d: %s", i, e)
+
+                # stampa dettagli colonna-per-colonna
+                for j, col in enumerate(columns):
+                    v = row[j]
+                    logger.error("  col=%s  value=%s", col, _format_value_for_log(v))
+
+                # alza eccezione per fermare tutto
+                raise
+        cn.commit()
+        logger.info("DIAGNOSTICA: row-by-row completata senza errori (strano se prima falliva).")
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
 
 
 def main() -> int:
@@ -116,6 +176,11 @@ def main() -> int:
         # --- Read table schema/types and build converters ---
         col_types = get_table_types(cn, schema, table)
 
+        # log dei tipi DB delle colonne che arrivano dal CSV
+        for c in columns:
+            if c in col_types:
+                logger.info("Tipo DB colonna %-30s -> %s", c, col_types[c])
+
         # 1) Tieni solo le colonne presenti anche in tabella (match per nome)
         columns_sql = [c for c in columns if c in col_types]
         columns_ignored = [c for c in columns if c not in col_types]
@@ -135,8 +200,6 @@ def main() -> int:
 
         logger.info("Colonne che verranno INSERITE (%d): %s", len(columns_sql), columns_sql)
 
-        # 2) Converters solo per le colonne che inserirò
-        #    (build_converters crea converter per tutte le colonne tabella; va bene così)
         converters = build_converters(
             col_types=col_types,
             decimal_sep=str(csv_cfg.get("decimal_separator", ",")),
@@ -144,33 +207,45 @@ def main() -> int:
             datetime_formats=csv_cfg.get("datetime_formats"),
         )
 
-        # 3) Insert SQL basato solo sulle colonne comuni
         insert_sql = build_insert_statement(schema=schema, table=table, columns=columns_sql)
 
         chunksize = int(csv_cfg.get("chunksize", 2000))
         fast_executemany = bool(sql_cfg.get("fast_executemany", True))
 
         for i, batch in enumerate(chunked(rows_iter, chunksize), start=1):
-            # Convert row values to match SQL Server column types (avoid 22018)
+            # Convert row values to match SQL Server column types
             try:
-                batch_converted = []
+                batch_converted: List[Dict[str, Any]] = []
                 for r in batch:
-                    # tieni solo le colonne che inserirò
                     r_filtered = {k: r.get(k) for k in columns_sql}
                     batch_converted.append(convert_row(r_filtered, converters))
             except Exception:
                 logger.exception("Errore conversione tipi (batch #%d).", i)
                 raise
 
-            inserted = insert_batch(
-                cn=cn,
-                insert_sql=insert_sql,
-                columns=columns_sql,
-                rows=batch_converted,
-                fast_executemany=fast_executemany,
-                logger=logger,
-                dry_run=dry_run,
-            )
+            try:
+                inserted = insert_batch(
+                    cn=cn,
+                    insert_sql=insert_sql,
+                    columns=columns_sql,
+                    rows=batch_converted,
+                    fast_executemany=fast_executemany,
+                    logger=logger,
+                    dry_run=dry_run,
+                )
+            except Exception:
+                logger.exception("Insert fallita (batch #%d). Avvio diagnostica row-by-row...", i)
+                # diagnostica: trova colonna/valore che rompe
+                _diagnose_truncation_row_by_row(
+                    cn=cn,
+                    insert_sql=insert_sql,
+                    columns=columns_sql,
+                    rows_converted=batch_converted,
+                    logger=logger,
+                    dry_run=dry_run,
+                )
+                raise
+
             total += inserted
             logger.info("Batch #%d: %d righe inserite (totale=%d)", i, inserted, total)
 

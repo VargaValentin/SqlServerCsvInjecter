@@ -20,11 +20,12 @@ csv:
       - "%Y-%m-%d"
       - "%d/%m/%Y %H:%M"
       - "%Y-%m-%d %H:%M:%S,%f"
+      - "%d-%b-%y %I.%M.%S.%f %p"
 
 
 sqlserver:
   connection_string: "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=AMADORI_STATISTICS;UID=sa;PWD=admin;TrustServerCertificate=yes;"
   schema: "dbo"
-  table: "PSC"
+  table: "AMADORI_ACCURACY_KPI"
   fast_executemany: true
   timeout_seconds: 30
